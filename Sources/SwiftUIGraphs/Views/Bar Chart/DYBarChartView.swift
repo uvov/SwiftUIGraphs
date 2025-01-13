@@ -10,7 +10,7 @@ import SwiftUI
 public struct DYBarChartView: View, PlotAreaChart {
 
     var barDataSets: [DYBarDataSet]
-    var settings: DYBarChartSettings 
+    var settings: DYBarChartSettings
     var yAxisSettings: YAxisSettings
     var xAxisSettings: XAxisSettings
     var yAxisScaler: AxisScaler
@@ -19,55 +19,52 @@ public struct DYBarChartView: View, PlotAreaChart {
     let generator = UISelectionFeedbackGenerator()
     #endif
     var markerLines: [MarkerLine] = []
-    //@State private var selectedIndex: Int?
     @Binding private var selectedBarDataSet: DYBarDataSet?
     @State var showBars: Bool = false
-    
+
     /// DYBarChartView Initializer
     /// - Parameters:
     ///   - barDataSets: an array of bar data sets, each of which holds the data for one bar.
     ///   - selectedBarDataSet: the bar data set that corresponds to the user's selection (by tapping).
     public init(barDataSets: [DYBarDataSet], selectedBarDataSet: Binding<DYBarDataSet?>) {
-        
         self.settings = DYBarChartSettings()
         self.xAxisSettings = DYBarChartXAxisSettings()
         self.yAxisSettings = YAxisSettings()
         self.barDataSets = barDataSets
         self._selectedBarDataSet = selectedBarDataSet
         self.yAxisValueAsString = {yValue in yValue.toDecimalString(maxFractionDigits: 0)}
-        self.yAxisScaler = AxisScaler(min:0, max: 0, maxTicks: 10) // initialize here otherwise error will be thrown
-        self.configureYAxisScaler(min: barDataSets.map({$0.negativeYValue}).min() ?? 0, max: barDataSets.map({$0.positiveYValue}).max() ?? 1)
 
+        // 初始化scaler时确保有有效值
+        let minValue = barDataSets.map({$0.negativeYValue}).min() ?? 0
+        let maxValue = barDataSets.map({$0.positiveYValue}).max() ?? 0
+        self.yAxisScaler = AxisScaler(min: minValue, max: max(maxValue, 0.1), maxTicks: 10)
     }
-    
+
     public var body: some View {
         GeometryReader { geo in
-            
             if self.barDataSets.count >= 1 {
                 VStack(spacing: 0) {
                     HStack(spacing:0) {
                         if self.yAxisSettings.showYAxis && yAxisSettings.yAxisPosition == .leading {
                             self.yAxisView(yValueAsString: self.yAxisValueAsString)
-
                         }
-                        ZStack {
 
+                        ZStack {
                             if self.yAxisSettings.showYAxisGridLines {
                                 self.yAxisGridLinesView()
                             }
-                            
+
                             ForEach(markerLines) { markerLine in
                                 self.markerLineView(markerLine: markerLine).clipped()
                             }
-                            
-                            self.bars()
-                         
 
-                        }.frame(width: self.plotAreaFrameWidth(proxy: geo)).background(settings.plotAreaBackgroundGradient)
-                        
+                            self.bars(totalSize: geo.size)
+                        }
+                        .frame(width: self.plotAreaFrameWidth(proxy: geo))
+                        .background(settings.plotAreaBackgroundGradient)
+
                         if self.yAxisSettings.showYAxis && yAxisSettings.yAxisPosition == .trailing {
                             self.yAxisView(yValueAsString: self.yAxisValueAsString, yAxisPosition: .trailing)
-
                         }
                     }
 
@@ -75,10 +72,11 @@ public struct DYBarChartView: View, PlotAreaChart {
                         self.xAxisView().frame(maxHeight: xAxisSettings.xAxisViewHeight)
                     }
                 }
-
             } else {
-                // placeholder grid in case not enough data is available
-                self.placeholderGrid(xAxisLineCount: 12, yAxisLineCount: 10).opacity(0.5).padding().transition(AnyTransition.opacity)
+                self.placeholderGrid(xAxisLineCount: 12, yAxisLineCount: 10)
+                    .opacity(0.5)
+                    .padding()
+                    .transition(AnyTransition.opacity)
             }
         }
         #if os(iOS)
@@ -87,57 +85,64 @@ public struct DYBarChartView: View, PlotAreaChart {
         }
         #endif
     }
-    
-    
-    private func bars()->some View {
-        GeometryReader {geo in
-            let totalHeight = geo.size.height
-            let totalWidth = geo.size.width
-            let barWidth:CGFloat = self.barWidth(totalWidth: totalWidth)
-            let yMinMax = self.yAxisScaler.axisMinMax
-            let positiveBarYOrigin =  totalHeight - max(0, yMinMax.min).convertToCoordinate(min: yMinMax.min, max: yMinMax.max, length: totalHeight)
-            let negativeBarYOrigin = totalHeight - min(0, yMinMax.max).convertToCoordinate(min: yMinMax.min, max: yMinMax.max, length: totalHeight)
- 
-            ForEach(barDataSets) { dataSet in
-                
-                let positiveBarHeight =  dataSet.positiveYValue / (yMinMax.max - yMinMax.min) * totalHeight
-                let negativeBarHeight = abs(dataSet.negativeYValue) / (yMinMax.max - yMinMax.min) * totalHeight
-                let positiveBarYPosition = self.barYPosition(barHeight: positiveBarHeight, totalHeight: totalHeight, originY: positiveBarYOrigin, valueNegative: false)
-                let negativeBarYPosition = self.barYPosition(barHeight: negativeBarHeight, totalHeight: totalHeight, originY: negativeBarYOrigin, valueNegative: true)
-                let totalBarHeight = positiveBarHeight + negativeBarHeight
-                let barsYPosition = (positiveBarHeight / totalBarHeight) * positiveBarYPosition + (negativeBarHeight / totalBarHeight) * negativeBarYPosition
-     
-                let i = self.indexFor(dataSet: dataSet) ?? 0
-                
-                BarViewPair(dataSet: dataSet, index: i, selectedBarDataSet: self.$selectedBarDataSet, dataSetCount: self.barDataSets.count, totalHeight: totalHeight, barWidth: barWidth, positiveBarYPosition: positiveBarYPosition, negativeBarYPosition: negativeBarYPosition, settings: settings, yAxisScaler: yAxisScaler)
-                .position(x: self.convertToXCoordinate(index: i, totalWidth: totalWidth), y: barsYPosition)
-                
-                .onTapGesture {
-                    
-                    guard self.settings.allowUserInteraction  else {return}
-                    #if os(iOS)
-                    self.generator.selectionChanged()
-                    #endif
-                    guard self.selectedBarDataSet != dataSet else {
-                        withAnimation {
-                            self.selectedBarDataSet = nil
-                        }
-                        return
-                    }
-                    withAnimation {
-           
-                        self.selectedBarDataSet = dataSet
-                    }
-                    
-                }
-                
-            }
 
+    private func bars(totalSize: CGSize) -> some View {
+        GeometryReader { proxy in
+            let totalHeight = max(proxy.size.height, 0.1) // 防止高度为0
+            let totalWidth = max(proxy.size.width, 0.1)   // 防止宽度为0
+            let barWidth = self.barWidth(totalWidth: totalWidth)
+            let yMinMax = self.yAxisScaler.axisMinMax
+            let yRange = max(yMinMax.max - yMinMax.min, 0.1) // 防止范围为0
+
+            ForEach(barDataSets) { dataSet in
+                if let index = self.indexFor(dataSet: dataSet) {
+                    let positiveBarHeight = (dataSet.positiveYValue / yRange) * totalHeight
+                    let negativeBarHeight = (abs(dataSet.negativeYValue) / yRange) * totalHeight
+
+                    let positiveBarYOrigin = totalHeight - max(0, yMinMax.min)
+                        .convertToCoordinate(min: yMinMax.min, max: yMinMax.max, length: totalHeight)
+                    let negativeBarYOrigin = totalHeight - min(0, yMinMax.max)
+                        .convertToCoordinate(min: yMinMax.min, max: yMinMax.max, length: totalHeight)
+
+                    let positiveBarYPosition = positiveBarYOrigin - positiveBarHeight / 2
+                    let negativeBarYPosition = negativeBarYOrigin + negativeBarHeight / 2
+
+                    let totalBarHeight = positiveBarHeight + negativeBarHeight
+                    let yPosition = totalBarHeight > 0 ?
+                        ((positiveBarHeight / totalBarHeight) * positiveBarYPosition +
+                         (negativeBarHeight / totalBarHeight) * negativeBarYPosition) :
+                        positiveBarYOrigin
+
+                    BarViewPair(
+                        dataSet: dataSet,
+                        index: index,
+                        selectedBarDataSet: self.$selectedBarDataSet,
+                        dataSetCount: self.barDataSets.count,
+                        totalHeight: totalHeight,
+                        barWidth: barWidth,
+                        positiveBarYPosition: positiveBarYPosition,
+                        negativeBarYPosition: negativeBarYPosition,
+                        settings: settings,
+                        yAxisScaler: yAxisScaler
+                    )
+                    .position(
+                        x: self.convertToXCoordinate(index: index, totalWidth: totalWidth),
+                        y: yPosition
+                    )
+                    .onTapGesture {
+                        guard self.settings.allowUserInteraction else { return }
+                        #if os(iOS)
+                        self.generator.selectionChanged()
+                        #endif
+                        withAnimation {
+                            self.selectedBarDataSet = self.selectedBarDataSet == dataSet ? nil : dataSet
+                        }
+                    }
+                }
+            }
         }
-        
-        
     }
-    
+
     private func barYPosition(barHeight: CGFloat, totalHeight: CGFloat, originY: CGFloat, valueNegative: Bool)->CGFloat {
         let halfBarHeight = valueNegative ? -barHeight / 2 : +barHeight / 2
         return originY - halfBarHeight
@@ -202,10 +207,10 @@ public struct DYBarChartView: View, PlotAreaChart {
     
     // MARK: Helper Funcs
     
-    private func barWidth(totalWidth:CGFloat)->CGFloat {
-       return (totalWidth / 2) / CGFloat(self.barDataSets.count)
+    private func barWidth(totalWidth: CGFloat) -> CGFloat {
+        return max((totalWidth / 2) / CGFloat(max(self.barDataSets.count, 1)), 0.1)
     }
-    
+
     public func xAxisLabelStrings()->[String] {
         return self.barDataSets.map({$0.xAxisLabel})
     }
@@ -214,22 +219,15 @@ public struct DYBarChartView: View, PlotAreaChart {
        return self.xAxisLabelStrings().firstIndex(where: {$0 == labelString}) ?? 0
    }
     
-    private func indexFor(dataSet: DYBarDataSet)->Int? {
+    private func indexFor(dataSet: DYBarDataSet) -> Int? {
         return self.barDataSets.firstIndex(where: {$0.id == dataSet.id})
     }
-    
-    private func convertToXCoordinate(index:Int, totalWidth: CGFloat)->CGFloat {
 
+    private func convertToXCoordinate(index: Int, totalWidth: CGFloat) -> CGFloat {
         let barWidth = self.barWidth(totalWidth: totalWidth)
-        let barCount = CGFloat(self.barDataSets.count)
-        
-        let spacerWidth = (totalWidth - barWidth * CGFloat(barCount)) / CGFloat(barCount + 1)
-        
-        let startPosition:CGFloat = spacerWidth + barWidth / 2.0
-        let xCoordinate = startPosition + CGFloat(index) * (spacerWidth + barWidth)
-        
-        return xCoordinate
-
+        let barCount = CGFloat(max(self.barDataSets.count, 1))
+        let spacerWidth = (totalWidth - barWidth * barCount) / CGFloat(barCount + 1)
+        return spacerWidth + barWidth / 2.0 + CGFloat(index) * (spacerWidth + barWidth)
     }
 }
 
